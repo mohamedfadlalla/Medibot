@@ -1,6 +1,6 @@
 import streamlit as st
 from langchain_groq import ChatGroq
-from langchain.chains import ConversationChain
+from langchain.chains import ConversationChain, LLMChain
 from langchain.memory import ConversationBufferMemory
 from langchain.prompts import PromptTemplate
 import os
@@ -45,9 +45,35 @@ MediBot:
 
 prompt = PromptTemplate(input_variables=["history", "input"], template=template)
 
-# Initialize session state for memory
+# New function to generate potential diagnoses
+def generate_potential_diagnoses(conversation_history):
+    diagnosis_prompt = PromptTemplate(
+        input_variables=["conversation"],
+        template="""
+Based on the following conversation between a patient and a medical chatbot, provide the top 3 most likely diagnoses. 
+Give only the names of the conditions without any explanation or additional text.
+Separate each diagnosis with a semicolon.
+
+Conversation:
+{conversation}
+
+Top 3 potential diagnoses:"""
+    )
+    
+    diagnosis_chain = LLMChain(
+        llm=llm,
+        prompt=diagnosis_prompt,
+        verbose=False
+    )
+    
+    diagnoses = diagnosis_chain.run(conversation=conversation_history)
+    return diagnoses.strip().split(';')
+
+# Initialize session state for memory and diagnoses
 if 'memory' not in st.session_state:
     st.session_state.memory = ConversationBufferMemory(return_messages=True)
+if 'diagnoses' not in st.session_state:
+    st.session_state.diagnoses = ["No diagnosis yet", "No diagnosis yet", "No diagnosis yet"]
 
 # Create the conversation chain
 conversation = ConversationChain(
@@ -64,26 +90,52 @@ st.title("MediBot - Medical Chat Assistant")
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-# Display chat messages from history on app rerun
-for message in st.session_state.messages:
-    with st.chat_message(message["role"]):
-        st.markdown(message["content"])
+# Create a two-column layout
+col1, col2 = st.columns([2, 1])
 
-# React to user input
-if prompt := st.chat_input("What are your symptoms?"):
-    # Display user message in chat message container
-    st.chat_message("user").markdown(prompt)
-    # Add user message to chat history
-    st.session_state.messages.append({"role": "user", "content": prompt})
+with col1:
+    # Create a container for the chat messages
+    chat_container = st.container()
 
-    # Get the response from the conversation chain
-    response = conversation.predict(input=prompt)
-    
-    # Display assistant response in chat message container
-    with st.chat_message("assistant"):
-        st.markdown(response)
-    # Add assistant response to chat history
-    st.session_state.messages.append({"role": "assistant", "content": response})
+    # Display chat messages from history on app rerun
+    with chat_container:
+        for message in st.session_state.messages:
+            with st.chat_message(message["role"]):
+                st.markdown(message["content"])
+
+    # Create a form for user input
+    with st.form(key="chat_form", clear_on_submit=True):
+        user_input = st.text_input("Type your message here:", key="user_input")
+        submit_button = st.form_submit_button("Send")
+
+    if submit_button and user_input:
+        # Display user message in chat message container
+        with chat_container:
+            st.chat_message("user").markdown(user_input)
+        # Add user message to chat history
+        st.session_state.messages.append({"role": "user", "content": user_input})
+
+        # Get the response from the conversation chain
+        response = conversation.predict(input=user_input)
+        
+        # Display assistant response in chat message container
+        with chat_container:
+            with st.chat_message("assistant"):
+                st.markdown(response)
+        # Add assistant response to chat history
+        st.session_state.messages.append({"role": "assistant", "content": response})
+
+        # Update potential diagnoses
+        conversation_history = "\n".join([f"{m['role']}: {m['content']}" for m in st.session_state.messages])
+        st.session_state.diagnoses = generate_potential_diagnoses(conversation_history)
+
+        # Rerun the app to update the chat display
+        st.experimental_rerun()
+
+with col2:
+    st.subheader("Potential Diagnoses")
+    for i, diagnosis in enumerate(st.session_state.diagnoses, 1):
+        st.write(f"{i}. {diagnosis}")
 
 # Debug: Display current memory contents
 if st.checkbox("Show conversation memory"):
@@ -93,4 +145,15 @@ if st.checkbox("Show conversation memory"):
 if st.button("Clear Conversation"):
     st.session_state.messages = []
     st.session_state.memory.clear()
+    st.session_state.diagnoses = ["No diagnosis yet", "No diagnosis yet", "No diagnosis yet"]
     st.experimental_rerun()
+
+# Add centered credit with hyperlink at the bottom of the app
+st.markdown(
+    """
+    <div style="position: fixed; left: 0; bottom: 10px; width: 100%; text-align: center;">
+        <p>Developed by <a href="https://www.linkedin.com/in/mohamedfadlalla-ai/" target="_blank">Mohamed Fadlalla</a></p>
+    </div>
+    """,
+    unsafe_allow_html=True
+)
